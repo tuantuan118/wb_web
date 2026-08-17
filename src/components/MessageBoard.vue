@@ -1,152 +1,446 @@
 <template>
   <div class="message-board">
-    <!-- 顶部菜单栏 -->
     <div class="top-menu">
-      <div class="menu-title">留言板</div>
+      <div class="menu-nav">
+        <router-link to="/message-board" class="nav-link" :class="{ active: feed === 'friends' }">
+          时间线
+        </router-link>
+        <router-link to="/my-tweets" class="nav-link" :class="{ active: feed === 'mine' }">
+          我的推文
+        </router-link>
+        <router-link to="/following" class="nav-link">好友</router-link>
+      </div>
       <div class="user-profile">
-        <span class="welcome-text">欢迎，{{ currentUser }}</span>
-        <div class="profile-avatar" :class="currentUser === 'admin' ? 'admin-avatar' : 'user-avatar'">
-          {{ currentUser.charAt(0).toUpperCase() }}
+        <span class="welcome-text">欢迎，{{ displayName }}</span>
+        <div class="profile-avatar user-avatar">
+          {{ displayName.charAt(0).toUpperCase() }}
         </div>
+        <button class="logout-btn" @click="handleLogout">退出</button>
       </div>
     </div>
 
-    <ul>
-      <li v-for="(msg, index) in messages" :key="index">
+    <div v-if="errorMsg" class="error-banner">{{ errorMsg }}</div>
+
+    <div v-if="loading" class="loading-tip">加载中...</div>
+
+    <ul v-else>
+      <li v-if="tweets.length === 0" class="empty-tip">{{ emptyText }}</li>
+      <li v-for="tweet in tweets" :key="tweet.id">
         <div class="message-header">
-          <div class="avatar" :class="msg.user === 'admin' ? 'admin-avatar' : 'user-avatar'">
-            {{ msg.user.charAt(0).toUpperCase() }}
+          <div class="avatar user-avatar">
+            {{ (tweet.userName || '?').charAt(0).toUpperCase() }}
           </div>
           <div class="user-info">
-            <span class="username">{{ msg.user }}</span>
-            <span class="message-text">{{ msg.text }}</span>
+            <span class="username">{{ tweet.userName }}</span>
+            <span class="message-time">{{ formatTime(tweet.sendTime) }}</span>
+            <span class="message-text">{{ tweet.content }}</span>
           </div>
-          <button class="icon-button" @click="toggleCommentInput(index)">
-            <i class="comment-icon">💬</i>
-          </button>
+          <div class="action-buttons">
+            <button
+              class="icon-button like-button"
+              :class="{ liked: likedIds.has(tweet.id) }"
+              @click="toggleLike(tweet)"
+              title="点赞"
+            >
+              ❤ {{ tweet.likeNum }}
+            </button>
+            <button class="icon-button" @click="toggleComments(tweet)" title="评论">
+              <i class="comment-icon">💬 {{ tweet.commentsCount }}</i>
+            </button>
+            <button
+              v-if="isOwn(tweet.userId)"
+              class="icon-button delete-button"
+              @click="handleDeleteTweet(tweet)"
+              title="删除"
+            >
+              🗑
+            </button>
+          </div>
         </div>
-        
-        <!-- 评论列表 -->
-        <div v-if="msg.comments && msg.comments.length > 0" class="comments-list">
-          <div v-for="(comment, cIndex) in msg.comments" :key="cIndex" class="comment-item">
-            <div class="comment-avatar" :class="comment.user === 'admin' ? 'admin-avatar' : 'user-avatar'">
-              {{ comment.user.charAt(0).toUpperCase() }}
+
+        <div v-if="tweet.showComments" class="comments-list">
+          <div v-if="tweet.loadingComments" class="comment-loading">加载评论...</div>
+          <div v-for="comment in tweet.commentsList" :key="comment.id" class="comment-item">
+            <div class="comment-avatar user-avatar">
+              {{ (comment.userName || '?').charAt(0).toUpperCase() }}
             </div>
             <div class="comment-content">
-              <span class="comment-username">{{ comment.user }}</span>
-              <span class="comment-text">{{ comment.text }}</span>
+              <span class="comment-username">{{ comment.userName }}</span>
+              <span class="comment-time">{{ formatTime(comment.sendTime) }}</span>
+              <span class="comment-text">{{ comment.content }}</span>
+            </div>
+            <div class="comment-actions">
+              <button
+                class="icon-button like-button small"
+                :class="{ liked: likedIds.has(comment.id) }"
+                @click="toggleLike(comment)"
+                title="点赞"
+              >
+                ❤ {{ comment.likeNum }}
+              </button>
+              <button
+                v-if="isOwn(comment.userId)"
+                class="icon-button delete-button small"
+                @click="handleDeleteComment(tweet, comment)"
+                title="删除"
+              >
+                🗑
+              </button>
             </div>
           </div>
         </div>
-        
-        <div v-if="msg.showCommentInput" class="comment-input">
+
+        <div v-if="tweet.showCommentInput" class="comment-input">
           <input
             type="text"
-            v-model="msg.comment"
+            v-model="tweet.commentText"
             placeholder="输入你的评论"
+            @keyup.enter="submitComment(tweet)"
           />
-          <button @click="submitComment(index)">提交评论</button>
+          <button @click="submitComment(tweet)" :disabled="tweet.submittingComment">
+            {{ tweet.submittingComment ? '提交中...' : '提交评论' }}
+          </button>
         </div>
       </li>
+      <li v-if="tweets.length > 0 && hasMore" class="load-more-item">
+        <button class="load-more-btn" :disabled="loadingMore" @click="loadMore">
+          {{ loadingMore ? '加载中...' : '加载更多' }}
+        </button>
+      </li>
     </ul>
+
     <form @submit.prevent="handleSubmit">
       <div class="input-container">
         <input
           type="text"
           v-model="newMessage"
-          placeholder="输入你的留言"
+          placeholder="输入你的推文"
+          :disabled="submitting"
         />
-        <button type="submit">提交</button>
+        <button type="submit" :disabled="submitting || !newMessage.trim()">
+          {{ submitting ? '发送中...' : '发布' }}
+        </button>
       </div>
     </form>
   </div>
 </template>
 
 <script>
+import {
+  getFriendsTweets,
+  getTweets,
+  sendTweets,
+  sendComments,
+  getComments,
+  addLike,
+  cancelLike,
+  deleteTweets,
+  deleteComments
+} from '@/api/tweets'
+import { getUserId, getAccount, getUserName, clearAuth } from '@/api/request'
+
+const PAGE_SIZE = 20
+
 export default {
   name: 'MessageBoard',
   data() {
     return {
-      messages: [], // 存储留言的数组
-      newMessage: '', // 当前输入的留言
-      currentUser: 'user' // 默认当前用户为 user，可以切换为 admin
-    };
+      tweets: [],
+      newMessage: '',
+      loading: false,
+      loadingMore: false,
+      submitting: false,
+      errorMsg: '',
+      likedIds: new Set(),
+      currentUserId: getUserId(),
+      page: 1,
+      total: 0
+    }
+  },
+  computed: {
+    displayName() {
+      return getUserName() || getAccount() || '用户'
+    },
+    feed() {
+      return this.$route.meta.feed || 'friends'
+    },
+    emptyText() {
+      return this.feed === 'mine'
+        ? '还没有推文，发一条吧'
+        : '暂无好友推文，去关注好友或自己发一条吧'
+    },
+    hasMore() {
+      return this.tweets.length < this.total
+    }
+  },
+  watch: {
+    feed: {
+      immediate: true,
+      handler() {
+        this.loadTweets(true)
+      }
+    }
   },
   methods: {
-    handleSubmit() {
-      if (!this.newMessage) return; // 如果留言为空，直接返回
-
-      // 创建新留言对象，包含用户信息
-      this.messages.push({ 
-        text: this.newMessage, 
-        user: this.currentUser, // 添加用户名
-        showCommentInput: false, 
-        comment: '',
-        comments: [] // 添加评论数组
-      });
-      
-      this.newMessage = ''; // 清空输入框
-      
-      // 模拟切换用户（在实际应用中，这里应该是固定的登录用户）
-      this.currentUser = this.currentUser === 'admin' ? 'user' : 'admin';
-    },
-    toggleCommentInput(index) {
-      this.messages[index].showCommentInput = !this.messages[index].showCommentInput; // 切换评论输入框的显示状态
-    },
-    submitComment(index) {
-      if (!this.messages[index].comment) return; // 如果评论为空，直接返回
-      
-      // 确保comments数组存在
-      if (!this.messages[index].comments) {
-        this.$set(this.messages[index], 'comments', []);
+    pickField(obj, ...keys) {
+      for (const key of keys) {
+        if (obj?.[key] !== undefined && obj?.[key] !== null) return obj[key]
       }
-      
-      // 添加评论到评论数组，包含用户信息
-      this.messages[index].comments.push({
-        text: this.messages[index].comment,
-        user: this.currentUser // 添加评论用户名
-      });
-      
-      console.log(`评论: ${this.messages[index].comment}`);
-      this.messages[index].comment = ''; // 清空评论输入框
-      this.messages[index].showCommentInput = false; // 隐藏评论输入框
-      
-      // 模拟切换用户
-      this.currentUser = this.currentUser === 'admin' ? 'user' : 'admin';
+      return undefined
+    },
+    toCount(value) {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : 0
+    },
+    isOwn(userId) {
+      return this.currentUserId != null && userId == this.currentUserId
+    },
+    formatTime(timestamp) {
+      if (timestamp === undefined || timestamp === null || timestamp === '') return ''
+      let ms = Number(timestamp)
+      if (Number.isNaN(ms)) return ''
+      // 兼容秒级时间戳
+      if (ms > 0 && ms < 1e12) ms *= 1000
+      const date = new Date(ms)
+      if (Number.isNaN(date.getTime())) return ''
+      return date.toLocaleString('zh-CN')
+    },
+    normalizeItem(t) {
+      const id = this.pickField(t, 'id', 'Id', 'ID')
+      const userId = this.pickField(t, 'userId', 'UserId', 'user_id')
+      const userName = this.pickField(t, 'userName', 'UserName', 'user_name') || ''
+      const content = this.pickField(t, 'content', 'Content') || ''
+      const sendTime = this.pickField(t, 'sendTime', 'SendTime', 'send_time')
+      const likeNum = this.toCount(
+        this.pickField(t, 'likeNum', 'LikeNum', 'like_num', 'likes', 'LikeCount')
+      )
+      const commentsCount = this.toCount(
+        this.pickField(t, 'commentsCount', 'CommentsCount', 'comments_count', 'commentNum')
+      )
+      const isLiked = !!(
+        this.pickField(t, 'isLiked', 'IsLiked', 'liked', 'Liked', 'hasLiked', 'HasLiked')
+      )
+      return {
+        ...t,
+        id,
+        userId,
+        userName,
+        content,
+        sendTime,
+        likeNum,
+        commentsCount,
+        isLiked
+      }
+    },
+    normalizeTweet(t) {
+      const item = this.normalizeItem(t)
+      const rawComments =
+        this.pickField(t, 'commentsList', 'CommentsList', 'comments_list') || []
+      return {
+        ...item,
+        showCommentInput: false,
+        showComments: false,
+        commentText: '',
+        commentsList: Array.isArray(rawComments)
+          ? rawComments.map((c) => this.normalizeItem(c))
+          : [],
+        loadingComments: false,
+        submittingComment: false
+      }
+    },
+    markLikedFromTweets(list) {
+      const next = new Set(this.likedIds)
+      list.forEach((t) => {
+        if (t.isLiked || t.liked || t.hasLiked) {
+          next.add(t.id)
+        }
+      })
+      this.likedIds = next
+    },
+    async fetchPage(page) {
+      const params = { pn: page, pSize: PAGE_SIZE }
+      if (this.feed === 'mine') {
+        return getTweets(params)
+      }
+      return getFriendsTweets(params)
+    },
+    async loadTweets(reset = true) {
+      if (reset) {
+        this.page = 1
+        this.loading = true
+      } else {
+        this.loadingMore = true
+      }
+      this.errorMsg = ''
+      try {
+        const res = await this.fetchPage(this.page)
+        const list = (res.data || []).map((t) => this.normalizeTweet(t))
+        this.total = res.count ?? list.length
+        this.tweets = reset ? list : [...this.tweets, ...list]
+        this.markLikedFromTweets(list)
+      } catch (err) {
+        this.errorMsg = err.message || '加载推文失败'
+        if (reset) this.tweets = []
+      } finally {
+        this.loading = false
+        this.loadingMore = false
+      }
+    },
+    async loadMore() {
+      if (!this.hasMore || this.loadingMore) return
+      this.page += 1
+      await this.loadTweets(false)
+    },
+    async handleSubmit() {
+      const content = this.newMessage.trim()
+      if (!content) return
+
+      this.submitting = true
+      this.errorMsg = ''
+      try {
+        await sendTweets({ content })
+        this.newMessage = ''
+        await this.loadTweets(true)
+      } catch (err) {
+        this.errorMsg = err.message || '发布失败'
+      } finally {
+        this.submitting = false
+      }
+    },
+    async toggleComments(tweet) {
+      const isOpen = tweet.showComments || tweet.showCommentInput
+      if (isOpen) {
+        tweet.showComments = false
+        tweet.showCommentInput = false
+        return
+      }
+      tweet.showComments = true
+      tweet.showCommentInput = true
+      await this.loadComments(tweet)
+    },
+    async loadComments(tweet) {
+      tweet.loadingComments = true
+      try {
+        const res = await getComments({ tweetsId: tweet.id, pn: 1, pSize: 50 })
+        const list = (res.data || []).map((c) => this.normalizeItem(c))
+        tweet.commentsList = list
+        tweet.commentsCount = this.toCount(res.count ?? list.length)
+        this.markLikedFromTweets(list)
+      } catch (err) {
+        this.errorMsg = err.message || '加载评论失败'
+      } finally {
+        tweet.loadingComments = false
+      }
+    },
+    async submitComment(tweet) {
+      const content = (tweet.commentText || '').trim()
+      if (!content) return
+
+      tweet.submittingComment = true
+      this.errorMsg = ''
+      try {
+        await sendComments({ tweetsId: tweet.id, content })
+        tweet.commentText = ''
+        tweet.showCommentInput = true
+        tweet.showComments = true
+        await this.loadComments(tweet)
+      } catch (err) {
+        this.errorMsg = err.message || '评论失败'
+      } finally {
+        tweet.submittingComment = false
+      }
+    },
+    async toggleLike(item) {
+      this.errorMsg = ''
+      const liked = this.likedIds.has(item.id)
+      const prevNum = this.toCount(item.likeNum)
+      const next = new Set(this.likedIds)
+
+      if (liked) {
+        next.delete(item.id)
+        this.likedIds = next
+        item.likeNum = Math.max(0, prevNum - 1)
+      } else {
+        next.add(item.id)
+        this.likedIds = next
+        item.likeNum = prevNum + 1
+      }
+
+      try {
+        if (liked) {
+          await cancelLike({ tweetsId: item.id })
+        } else {
+          await addLike({ tweetsId: item.id })
+        }
+      } catch (err) {
+        const rollback = new Set(this.likedIds)
+        if (liked) {
+          rollback.add(item.id)
+          item.likeNum = prevNum
+        } else {
+          rollback.delete(item.id)
+          item.likeNum = prevNum
+        }
+        this.likedIds = rollback
+        this.errorMsg = err.message || '操作失败'
+      }
+    },
+    async handleDeleteTweet(tweet) {
+      if (!confirm('确定删除这条推文？')) return
+      this.errorMsg = ''
+      try {
+        await deleteTweets({ tweetsId: tweet.id })
+        await this.loadTweets(true)
+      } catch (err) {
+        this.errorMsg = err.message || '删除失败'
+      }
+    },
+    async handleDeleteComment(tweet, comment) {
+      if (!confirm('确定删除这条评论？')) return
+      this.errorMsg = ''
+      try {
+        await deleteComments({ tweetsId: comment.id })
+        await this.loadComments(tweet)
+      } catch (err) {
+        this.errorMsg = err.message || '删除评论失败'
+      }
+    },
+    handleLogout() {
+      clearAuth()
+      this.$router.push('/login')
     }
   }
-};
+}
 </script>
 
 <style scoped>
 html, body {
-  height: 100%; /* 确保 html 和 body 高度为 100% */
-  margin: 0; /* 去掉默认的 margin */
-  padding: 0; /* 去掉默认的 padding */
-  overflow: hidden; /* 禁止 body 滚动，避免白边 */
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .message-board {
-  background-image: url('@/assets/back.png'); /* 替换为你的背景图片路径 */
+  background-image: url('@/assets/back.png');
   background-size: cover;
   background-position: center;
-  background-attachment: fixed; /* 背景固定，不随内容滚动 */
-  height: 100vh; /* 设置高度为 100vh，确保铺满整个屏幕 */
-  width: 100vw; /* 设置宽度为 100vw，确保铺满整个视口 */
+  background-attachment: fixed;
+  height: 100vh;
+  width: 100vw;
   display: flex;
-  flex-direction: column; /* 使子元素垂直排列 */
-  justify-content: flex-start; /* 从顶部开始排列 */
-  padding: 0; /* 移除内边距，由子元素控制 */
-  color: white; /* 文字颜色 */
-  max-width: 100%; /* 设置最大宽度为 100% */
-  margin: 0; /* 去掉默认的 margin */
-  box-sizing: border-box; /* 确保padding不会增加元素的总宽高 */
-  position: fixed; /* 固定定位，防止滚动出现白边 */
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 0;
+  color: white;
+  max-width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+  position: fixed;
   top: 0;
   left: 0;
 }
 
-/* 顶部菜单栏样式 */
 .top-menu {
   width: 100%;
   height: 60px;
@@ -157,23 +451,35 @@ html, body {
   padding: 0 20px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
   z-index: 10;
-  box-sizing: border-box; /* 确保padding不会增加元素总高度 */
+  box-sizing: border-box;
 }
 
-.menu-title {
-  font-size: 1.5rem;
-  font-weight: bold;
+.menu-nav {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.75);
+  text-decoration: none;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.nav-link.active,
+.nav-link:hover {
   color: white;
 }
 
 .user-profile {
   display: flex;
   align-items: center;
-  height: 100%; /* 确保高度与菜单栏一致 */
+  height: 100%;
+  gap: 10px;
 }
 
 .welcome-text {
-  margin-right: 10px;
   color: white;
 }
 
@@ -186,55 +492,75 @@ html, body {
   align-items: center;
   font-weight: bold;
   color: white;
+}
+
+.logout-btn {
+  padding: 6px 14px;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 5px;
   cursor: pointer;
-  transition: transform 0.2s;
-  margin: 10px 0; /* 添加上下边距 */
+  font-size: 14px;
 }
 
-.profile-avatar:hover {
-  transform: scale(1.1);
+.logout-btn:hover {
+  background-color: #c82333;
 }
 
-/* 留言列表容器调整 */
+.error-banner {
+  background: rgba(231, 76, 60, 0.9);
+  color: white;
+  text-align: center;
+  padding: 8px;
+}
+
+.loading-tip, .empty-tip {
+  text-align: center;
+  padding: 40px;
+  color: white;
+  flex: 1;
+}
+
 ul {
   list-style-type: none;
   padding: 2vh 2vw;
-  margin: 0; /* 去掉默认的 margin */
-  flex-grow: 1; /* 使留言记录占据剩余空间 */
-  overflow-y: auto; /* 允许滚动 */
-  -webkit-overflow-scrolling: touch; /* 使滚动在移动设备上更流畅 */
-  width: 100%; /* 确保宽度与父容器一致 */
+  margin: 0;
+  flex-grow: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  align-items: center; /* 水平居中列表项 */
+  align-items: center;
   box-sizing: border-box;
 }
 
 form {
-  margin: 20px 2vw; /* 输入框与留言记录之间的间距 */
+  margin: 20px 2vw;
   width: 100%;
   box-sizing: border-box;
   padding: 0 2vw;
 }
 
 .input-container {
-  display: flex; /* 使用 flexbox 布局 */
-  justify-content: center; /* 水平居中 */
-  width: 100%; /* 宽度为 100% */
-  max-width: 100%; /* 确保不超出父容器 */
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
 }
 
 input {
-  padding: 2vh; /* 使用视口单位增大输入框的内边距 */
+  padding: 2vh;
   border: none;
   border-radius: 5px;
-  margin-right: 1vw; /* 使用视口单位设置右边距 */
-  flex: 1; /* 使输入框占据剩余空间 */
-  max-width: 70%; /* 调整最大宽度 */
+  margin-right: 1vw;
+  flex: 1;
+  max-width: 70%;
 }
 
 button {
-  padding: 2vh 3vw; /* 使用视口单位增大按钮的内边距 */
+  padding: 2vh 3vw;
   border: none;
   border-radius: 5px;
   background-color: #007bff;
@@ -246,24 +572,37 @@ button:hover {
   background-color: #0056b3;
 }
 
+button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 li {
   background: rgba(255, 255, 255, 0.8);
   margin: 5px 0;
   padding: 10px;
   border-radius: 5px;
-  color: #333; /* 改善文字可读性 */
-  width: 70%; /* 与输入框宽度保持一致 */
-  box-sizing: border-box; /* 确保padding不会增加元素总宽度 */
+  color: #333;
+  width: 70%;
+  box-sizing: border-box;
 }
 
-/* 留言头部样式 */
+.load-more-item {
+  background: transparent;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.load-more-btn {
+  padding: 10px 24px;
+}
+
 .message-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
 }
 
-/* 头像样式 */
 .avatar {
   width: 40px;
   height: 40px;
@@ -277,15 +616,10 @@ li {
   flex-shrink: 0;
 }
 
-.admin-avatar {
-  background-color: #e74c3c; /* 管理员头像背景色 */
-}
-
 .user-avatar {
-  background-color: #3498db; /* 普通用户头像背景色 */
+  background-color: #3498db;
 }
 
-/* 用户信息样式 */
 .user-info {
   display: flex;
   flex-direction: column;
@@ -295,35 +629,66 @@ li {
 
 .username {
   font-weight: bold;
-  margin-bottom: 5px;
+  margin-bottom: 2px;
   color: #2c3e50;
+}
+
+.message-time {
+  font-size: 0.75rem;
+  color: #7f8c8d;
+  margin-bottom: 5px;
 }
 
 .message-text {
   word-break: break-word;
 }
 
-/* 评论图标按钮 */
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 8px;
+}
+
 .icon-button {
   background: none;
   border: none;
   padding: 5px;
   cursor: pointer;
-  margin-left: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: #333;
+  font-size: 0.85rem;
+}
+
+.icon-button.small {
+  font-size: 0.75rem;
+  padding: 2px;
+}
+
+.like-button.liked {
+  color: #e74c3c;
+}
+
+.delete-button {
+  color: #e74c3c;
 }
 
 .comment-icon {
   font-style: normal;
-  font-size: 1.2rem;
+  font-size: 0.9rem;
 }
 
-/* 评论列表样式 */
 .comments-list {
   margin-top: 10px;
   width: 100%;
+}
+
+.comment-loading {
+  font-size: 0.85rem;
+  color: #666;
+  padding: 4px 0;
 }
 
 .comment-item {
@@ -333,7 +698,7 @@ li {
   border-radius: 4px;
   padding: 8px;
   margin: 5px 0;
-  margin-left: 20px; /* 缩进一格 */
+  margin-left: 20px;
 }
 
 .comment-avatar {
@@ -359,8 +724,14 @@ li {
 .comment-username {
   font-weight: bold;
   font-size: 0.8rem;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
   color: #2c3e50;
+}
+
+.comment-time {
+  font-size: 0.7rem;
+  color: #7f8c8d;
+  margin-bottom: 3px;
 }
 
 .comment-text {
@@ -368,7 +739,14 @@ li {
   word-break: break-word;
 }
 
-/* 确保评论输入区域也对齐 */
+.comment-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
 .comment-input {
   width: 100%;
   margin-top: 8px;
@@ -376,8 +754,26 @@ li {
 }
 
 li div input {
-  width: calc(100% - 80px); /* 为提交按钮留出空间 */
+  width: calc(100% - 80px);
   margin-right: 8px;
-  max-width: none; /* 覆盖父级的max-width限制 */
+  max-width: none;
 }
-</style> 
+
+@media (max-width: 640px) {
+  li {
+    width: 94%;
+  }
+
+  .menu-nav {
+    gap: 10px;
+  }
+
+  .nav-link {
+    font-size: 0.95rem;
+  }
+
+  .welcome-text {
+    display: none;
+  }
+}
+</style>

@@ -4,21 +4,21 @@
       <h2>用户登录</h2>
       <form @submit.prevent="handleLogin">
         <div class="input-group">
-          <label for="username">用户名</label>
-          <input 
-            type="text" 
-            id="username" 
-            v-model="username" 
-            placeholder="请输入用户名"
+          <label for="username">账号</label>
+          <input
+            type="text"
+            id="username"
+            v-model="username"
+            placeholder="请输入账号"
             required
           />
         </div>
         <div class="input-group">
           <label for="password">密码</label>
-          <input 
-            type="password" 
-            id="password" 
-            v-model="password" 
+          <input
+            type="password"
+            id="password"
+            v-model="password"
             placeholder="请输入密码"
             required
           />
@@ -28,14 +28,15 @@
           <label for="remember">记住我</label>
         </div>
         <div class="error-message" v-if="errorMsg">{{ errorMsg }}</div>
-        <button type="submit" class="login-btn">登录</button>
+        <button type="submit" class="login-btn" :disabled="loading">
+          {{ loading ? '登录中...' : '登录' }}
+        </button>
         <div class="register-link">
           还没有账号？<a href="#" @click.prevent="showRegisterModal = true">立即注册</a>
         </div>
       </form>
     </div>
 
-    <!-- 注册弹窗 -->
     <div class="modal-overlay" v-if="showRegisterModal" @click="closeModal">
       <div class="register-modal" @click.stop>
         <div class="modal-header">
@@ -44,37 +45,48 @@
         </div>
         <form @submit.prevent="handleRegister">
           <div class="input-group">
-            <label for="reg-username">用户名</label>
-            <input 
-              type="text" 
-              id="reg-username" 
-              v-model="regUsername" 
-              placeholder="请输入用户名"
+            <label for="reg-username">账号</label>
+            <input
+              type="text"
+              id="reg-username"
+              v-model="regUsername"
+              placeholder="请输入账号"
               required
             />
           </div>
           <div class="input-group">
+            <label for="reg-nickname">昵称</label>
+            <input
+              type="text"
+              id="reg-nickname"
+              v-model="regNickname"
+              placeholder="请输入昵称（可选）"
+            />
+          </div>
+          <div class="input-group">
             <label for="reg-password">密码</label>
-            <input 
-              type="password" 
-              id="reg-password" 
-              v-model="regPassword" 
+            <input
+              type="password"
+              id="reg-password"
+              v-model="regPassword"
               placeholder="请输入密码"
               required
             />
           </div>
           <div class="input-group">
             <label for="confirm-password">确认密码</label>
-            <input 
-              type="password" 
-              id="confirm-password" 
-              v-model="confirmPassword" 
+            <input
+              type="password"
+              id="confirm-password"
+              v-model="confirmPassword"
               placeholder="请再次输入密码"
               required
             />
           </div>
           <div class="error-message" v-if="regErrorMsg">{{ regErrorMsg }}</div>
-          <button type="submit" class="register-btn">注册</button>
+          <button type="submit" class="register-btn" :disabled="regLoading">
+            {{ regLoading ? '注册中...' : '注册' }}
+          </button>
         </form>
       </div>
     </div>
@@ -82,6 +94,10 @@
 </template>
 
 <script>
+import { login, register } from '@/api/user'
+import { getUser } from '@/api/friend'
+import { setToken, setUserInfo } from '@/api/request'
+
 export default {
   name: 'LoginForm',
   data() {
@@ -90,74 +106,94 @@ export default {
       password: '',
       remember: false,
       errorMsg: '',
+      loading: false,
       showRegisterModal: false,
       regUsername: '',
+      regNickname: '',
       regPassword: '',
       confirmPassword: '',
-      regErrorMsg: ''
-    };
+      regErrorMsg: '',
+      regLoading: false
+    }
   },
   methods: {
-    handleLogin() {
-      // 这里添加登录逻辑
+    async handleLogin() {
       if (!this.username || !this.password) {
-        this.errorMsg = '请输入用户名和密码';
-        return;
+        this.errorMsg = '请输入账号和密码'
+        return
       }
-      
-      // 模拟登录请求
-      // 实际应用中，这里应该调用API进行身份验证
-      console.log('登录信息:', {
-        username: this.username,
-        password: this.password,
-        remember: this.remember
-      });
-      
-      // 模拟登录成功，跳转到留言板页面
-      this.$router.push('/message-board');
-      
-      // 如果登录失败，显示错误信息
-      // this.errorMsg = '用户名或密码错误';
-    },
-    goToRegister() {
-      this.showRegisterModal = true;
+
+      this.errorMsg = ''
+      this.loading = true
+      try {
+        const res = await login({
+          account: this.username,
+          password: this.password
+        })
+        setToken(res.token, this.remember)
+        let userName = this.username
+        try {
+          const profile = await getUser({ id: res.userId })
+          if (profile?.data?.userName) {
+            userName = profile.data.userName
+          }
+        } catch {
+          // 昵称拉取失败时沿用账号
+        }
+        setUserInfo(
+          {
+            userId: res.userId,
+            account: this.username,
+            userName
+          },
+          this.remember
+        )
+        this.$router.push('/message-board')
+      } catch (err) {
+        this.errorMsg = err.message || '登录失败'
+      } finally {
+        this.loading = false
+      }
     },
     closeModal(e) {
-      // 点击遮罩层关闭弹窗
       if (e.target.classList.contains('modal-overlay')) {
-        this.showRegisterModal = false;
+        this.showRegisterModal = false
       }
     },
-    handleRegister() {
-      // 验证两次密码是否一致
+    async handleRegister() {
       if (this.regPassword !== this.confirmPassword) {
-        this.regErrorMsg = '两次输入的密码不一致';
-        return;
+        this.regErrorMsg = '两次输入的密码不一致'
+        return
       }
-      
-      // 模拟注册请求
-      console.log('注册信息:', {
-        username: this.regUsername,
-        password: this.regPassword
-      });
-      
-      // 模拟注册成功
-      alert('注册成功！请使用新账号登录');
-      this.showRegisterModal = false;
-      
-      // 清空注册表单
-      this.regUsername = '';
-      this.regPassword = '';
-      this.confirmPassword = '';
-      this.regErrorMsg = '';
+
+      this.regErrorMsg = ''
+      this.regLoading = true
+      try {
+        await register({
+          account: this.regUsername,
+          userName: this.regNickname || this.regUsername,
+          password: this.regPassword
+        })
+        alert('注册成功！请使用新账号登录')
+        this.showRegisterModal = false
+        this.username = this.regUsername
+        this.regUsername = ''
+        this.regNickname = ''
+        this.regPassword = ''
+        this.confirmPassword = ''
+      } catch (err) {
+        this.regErrorMsg = err.message || '注册失败'
+      } finally {
+        this.regLoading = false
+      }
     }
   }
-};
+}
 </script>
 
 <style scoped>
 .login-container {
-  background-image: url('@/assets/back.png'); /* 使用与留言板相同的背景 */
+  background-image: url('@/assets/back.png');
   background-size: cover;
   background-position: center;
   height: 100vh;
@@ -233,6 +269,11 @@ input[type="password"] {
   background-color: #0056b3;
 }
 
+.login-btn:disabled, .register-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .register-link {
   text-align: center;
   margin-top: 20px;
@@ -254,7 +295,6 @@ input[type="password"] {
   text-align: center;
 }
 
-/* 弹窗样式 */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -303,4 +343,4 @@ input[type="password"] {
 .close-btn:hover {
   color: #333;
 }
-</style> 
+</style>

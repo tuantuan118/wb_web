@@ -1,0 +1,7 @@
+services:
+  wb-web:
+    build: .
+    container_name: wb-web
+    ports:
+      - "80:80"
+    restart: unless-stopped
