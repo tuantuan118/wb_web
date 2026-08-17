@@ -1,7 +1,14 @@
 services:
   wb-web:
     build: .
+    image: wb-web:latest
     container_name: wb-web
     ports:
       - "80:80"
+    networks:
+      - container_test
     restart: unless-stopped
+
+networks:
+  container_test:
+    external: true
