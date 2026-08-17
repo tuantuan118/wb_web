@@ -1,6 +1,10 @@
 services:
   wb-web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
     image: wb-web:latest
     container_name: wb-web
     ports:

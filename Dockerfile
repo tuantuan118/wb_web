@@ -6,7 +6,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+
+# 强制同源（由 Nginx 反代 /v1/），避免打到 :8080 触发跨域 OPTIONS → 405
+ARG VITE_API_BASE_URL=
+RUN printf 'VITE_API_BASE_URL=%s\n' "$VITE_API_BASE_URL" > .env.production \
+  && npm run build
 
 # 运行阶段：Nginx 托管静态资源
 FROM nginx:1.30.4
